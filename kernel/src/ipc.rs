@@ -244,9 +244,7 @@ impl<const NUM_PROCS: usize> LegacyDriver for IPC<NUM_PROCS> {
                         if s.len() == slice_data.len()
                             && s.iter().zip(slice_data.iter()).all(|(c1, c2)| c1 == c2)
                         {
-                            ReturnCode::SuccessWithValue {
-                                value: (p.appid().id() as usize) + 1,
-                            }
+                            ReturnCode::SUCCESS
                         } else {
                             ReturnCode::FAIL
                         }
