@@ -168,10 +168,8 @@ operation might have different success return variants or failure return
 variants, then it should be split into multiple system calls.
 
 Note that invoking a system call that is not supported by the kernel
-always returns a Failure result with an error code of NOSUPPORT (see
-Section 4 below). Therefore, system call invocations that need to
-handle userspace/kernel mismatches should be able to handle Failure in
-addition to the expected failure variant (if different than Failure).
+always returns a failure with an error code of NOSUPPORT (see
+Section 4 below).
 
 This requirement of a single failure variant and a single success
 variant is to simplify userspace implementations and preclude them
@@ -271,7 +269,7 @@ syscall identifier `0x2` starts receiving console data into a buffer.
 
 If userspace invokes a system call on a peripheral driver that is not installed in
 the kernel, the kernel MUST return a Failure result with an error
-of `NOSUPPORT`.
+of `NODEVICE`.
 
 4.1 Yield (Class ID: 0)
 --------------------------------
@@ -346,19 +344,20 @@ stack frames) for upcalls.
 4.2 Subscribe (Class ID: 1)
 --------------------------------
 
-The Subscribe system call class is how a userspace process registers upcalls
-with the kernel. Subscribe system calls are implemented by peripheral syscall
-drivers, so the set of valid Subscribe calls depends on the platform and what
-drivers were compiled into the kernel.
+The Subscribe system call class is how a userspace process registers
+upcalls with the kernel. Subscribe system calls are implemented by
+peripheral syscall drivers, so the set of valid Subscribe calls
+depends on the platform and what drivers were compiled into the
+kernel.
 
-The register arguments for Subscribe system calls are as follows. The registers
-r0-r3 correspond to r0-r3 on CortexM and a0-a3 on RISC-V.
+The register arguments for Subscribe system calls are as follows. The
+registers r0-r3 correspond to r0-r3 on CortexM and a0-a3 on RISC-V.
 
 | Argument               | Register |
 |------------------------|----------|
 | Driver identifer       | r0       |
 | Subscribe identifier   | r1       |
-| Upcall pointer       | r2       |
+| Upcall pointer         | r2       |
 | Application data       | r3       |
 
 
@@ -370,14 +369,19 @@ unmodified.
 If the passed upcall is not valid (is outside process executable
 memory and is not the Null Upcall described below), the kernel MUST
 NOT invoke the requested driver and MUST immediately return a failure
-with a return code of EINVAL.
+with a return code of EINVAL. The currently registered upcall
+remains registered and the kernel does not cancel any pending invocations
+of the existing upcall.
 
-A passed upcall MUST be valid until the next invocation of `subscribe`
-with the same syscall and driver identifier. When userspace invokes
-subscribe, the kernel MUST cancel all pending upcalls for that driver
-and subscribe identifier: it MUST NOT invoke the previous upcall after
-the call to subscribe, and MUST NOT invoke the new upcall for events
-that occurred before the call to subscribe.
+Any upcall passed from a process MUST remain valid until the next
+successful invocation of `subscribe` by that process with the same
+syscall and driver identifier. When a process makes a successful
+subscribe system call (one which results in the `Success with 2 u32`
+return variant), the kernel MUST cancel all pending upcalls on that
+process for that driver and subscribe identifier: it MUST NOT invoke
+the previous upcall after the call to `subscribe`, and MUST NOT
+invoke the new upcall for events that the kernel handled before the
+call to `subscribe`.
 
 Note that these semantics create a period over which upcalls might
 be lost: any upcalls that were pending when `subscribe` was called
@@ -445,11 +449,11 @@ error code of NOSUPPORT and an upcall of the Null Upcall.
 4.3 Command (Class ID: 2)
 ---------------------------------
 
-The Command system call class is how a userspace process calls a function
-in the kernel, either to return an immediate result or start a long-running
-operation. Command system calls are implemented by peripheral syscall drivers,
-so the set of valid Command calls depends on the platform and what drivers were
-compiled into the kernel.
+The Command system call class is how a userspace process calls a
+function in the kernel, either to return an immediate result or start
+a long-running operation. Command system calls are implemented by
+syscall drivers, so the set of valid Command calls depends on the
+platform and what drivers were compiled into the kernel.
 
 The register arguments for Command system calls are as follows. The registers
 r0-r3 correspond to r0-r3 on CortexM and a0-a3 on RISC-V.
@@ -470,7 +474,9 @@ Command instance (combination of major and minor identifier) specifies
 its failure variant and success variant. If userspace invokes a
 command on a peripheral that is not installed, the kernel returns a
 failure variant of `Failure`, with an associated error code of
-`NOSUPPORT`.
+`NOSUPPORT`. Therefore, command invocations that need to
+handle userspace/kernel mismatches should be able to handle `Failure` in
+addition to the expected failure variant (if different than `Failure`).
 
 4.3.1 Command Identifier 0
 --------------------------------
@@ -485,13 +491,15 @@ kernel returns `Failure` with an error code of `NOSUPPORT`.
 ---------------------------------
 
 The Read-Write Allow system call class is how a userspace process
-shares a read-write buffer with the kernel. When userspace shares a
-buffer, it can no longer access it. Calling a Read-Write Allow system
-call also returns a buffer (address and length).  On the first call to
-a Read-Write Allow system call, the kernel returns a zero-length
-buffer. Subsequent calls to Read-Write Allow return the previous
-buffer passed. Therefore, to regain access to the buffer, the process
-must call the same Read-Write Allow system call again.
+shares buffer with the kernel that the kernel can read and write. When
+userspace shares a buffer, it can no longer access it. Calling a
+Read-Write Allow system call also returns a buffer (address and
+length).  On the first call to a Read-Write Allow system call, the
+kernel returns a zero-length buffer. Subsequent calls to Read-Write
+Allow return the previous buffer passed. Therefore, to regain access
+to a passed buffer, the process must call the same Read-Write Allow 
+system call again. It can do so with a zero-length buffer if it
+wishes to pass no memory to the kernel.
 
 The register arguments for Read-Write Allow system calls are as
 follows. The registers r0-r3 correspond to r0-r3 on CortexM and a0-a3
@@ -507,10 +515,10 @@ on RISC-V.
 The return variants for Read-Write Allow system calls are `Failure
 with 2 u32` and `Success with 2 u32`.  In both cases, `Argument 0`
 contains an address and `Argument 1` contains a length.  In the case
-of failure, the address and length are those that were passed in the
-call.  In the case of success, the address and length are those that
+of failure, the address and length MUST be those that were passed in the
+call.  In the case of success, the address and length MUST be those that
 were passed in the previous call. On the first successful invocation
-of a particular Read-Write Allow system call, the kernel returns
+of a particular Read-Write Allow system call, the kernel MUST return
 address 0 and size 0.
 
 The buffer identifier specifies which buffer this is. A driver may
@@ -522,7 +530,7 @@ passed buffer must be readable and writeable by the
 process. Zero-length buffers may therefore have abitrary addresses. If
 the passed buffer is not complete within the calling process's
 writeable address space, the kernel MUST return a failure result with
-an error code of INVAL (invalid value).
+an error code of INVALID (invalid value).
 
 Because a process relinquishes access to a buffer when it makes a
 Read-Write Allow call with it, the buffer passed on the subsequent
@@ -530,13 +538,15 @@ Read-Write Allow call cannot overlap with the first passed buffer.
 This is because the application does not have access to that
 memory. If an application needs to extend a buffer, it must first call
 Read-Write Allow to reclaim the buffer, then call Read-Write Allow
-again to re-allow it with a different size.
-
+again to re-allow it with a different size. If userspace passes
+an overlapping buffer, the kernel MUST return a failure result with
+an error code of INVALID.
+ 
 4.5 Read-Only Allow (Class ID: 4)
 ---------------------------------
 
-The Read-Only Allow class is identical to the Read-Write Allow class
-with two exceptions: the buffer it passes to the kernel is read-only,
+The Read-Only Allow class is very similar to the Read-Write Allow class.
+It differs in tow ways: the buffer it passes to the kernel is read-only,
 and the process retains read access to the buffer. The kernel cannot
 write to the buffer. The semantics and calling conventions of
 Read-Only Allow are otherwise identical to Read-Write Allow.
@@ -571,7 +581,7 @@ the calling process's readable address space. Every byte of the passed
 buffer must be readable and writeable by the process. Zero-length
 buffers may therefore have abitrary addresses. If the passed buffer is
 not complete within the calling process's readable address space, the
-kernel MUST return a failure result with an error code of INVAL
+kernel MUST return a failure result with an error code of INVALID
 (invalid value).
 
 4.6 Memop (Class ID: 5)
@@ -609,7 +619,7 @@ are 12:
 
 The success return variant is Memop class system call specific and
 specified in the table above. All Memop class system calls have a
-_Failure_ failure type.
+`Failure` failure type.
 
 4.7 Exit (Class ID: 6)
 --------------------------------
@@ -660,61 +670,168 @@ information can be stored in the kernel and used in management or policy decisio
 The definition of these status codes is outside the scope of this document.
 
 If an exit syscall is successful, it does not return. Therefore, the return
-value of an exit syscall is always _Failure_. `exit-restart` and 
+value of an exit syscall is always `Failure`. `exit-restart` and 
 `exit-terminate` MUST always succeed and so never return. 
 
 5 Userspace Library Methods
 =================================
 
 This section describes the method signatures for system calls and upcalls in C and Rust.
-Because C allows a single return value but Tock system calls can return multiple values,
-the low-level APIs are not idiomatic C. These low-level APIs are translated into standard C
-code by the userspace library.
 
 5.1 libtock-c
 ---------------------------------
 
-5.1 libtock-rs
+Because C allows a single return value but Tock system calls can return multiple values,
+they do not easily map to idiomatic C. These low-level APIs are translated into standard C
+code by the userspace library. The general calling convention is that the complex return types
+are returned as structs. Since these structs are composite types larger than a single word, the
+ARM and RISCV calling conventions pass them on the stack.
+
+The system calls are implemented as inline assembly. This assembly moves arguments into the correct
+registers and invokes the system call, and on return copies the returned data into the return type
+on the stack.
+
+
+5.1.1 Yield
 ---------------------------------
 
-6 The Driver Trait
-=================================
+The Yield system calls have these function prototypes:
 
-The core kernel, in response to userspace system calls, invokes methods on the Driver
-trait implemented by system call drivers.  This section describes the Driver trait API
-and how it interacts with the core kernel's system calls. Note that
+```c
+int yield_no_wait(void);
+void yield(void);
+```
 
+`yield_no_wait` returns 1 if an upcall was invoked and 0 if one was not invoked.
 
-6.1 Return Types
+5.1.2 Subscribe
 ---------------------------------
 
-Methods in the Driver trait have return values of Rust types that
-correspond to their allowed return values and which have corresponding
-in encodings desribed in Section 3.2.
+The subscribe system call has this function prototype:
 
-6.1.1 Return Type Values
+```c
+typedef void (subscribe_upcall)(int, int, int, void*);
+
+typedef struct {
+  bool success;
+  subscribe_upcall* upcall;
+  void* userdata;
+  tock_error_t error;
+} subscribe_return_t;
+
+subscribe_return_t subscribe(uint32_t driver, uint32_t subscribe,
+                             subscribe_upcall uc, void* userdata);
+```
+
+The `success` field indicates whether the call to subscribe succeeded.
+If it failed, the error code is stored in `error`. If it succeeded,
+the value in `error` is undefined.
+
+5.1.3 Command
+---------------------------------
+
+The subscribe system call has this function prototype:
+
+```c
+typedef struct {
+  syscall_rtype_t type;
+  uint32_t data[3];
+} syscall_return_t;
+
+syscall_return_t command(uint32_t driver, uint32_t command, int data, int arg2);
+```
+
+Because a command can return any failure or success variant, it returns a direct
+mapping of the return registers. `rtype` contains the value of `r0`, while
+`data[0]` contains what was passed in `r1`, `data[1]` contains was passed in `r2`,
+and `data[2]` contains what was passed in `r3`.
+
+5.1.4 Read-Write Allow
+---------------------------------
+
+The read-write allow system call has this function prototype:
+
+```c
+typedef struct {
+  bool success;
+  void* ptr;
+  size_t size;
+  tock_error_t error;
+} allow_rw_return_t;
+
+allow_rw_return_t allow_readwrite(uint32_t driver, uint32_t allow, void* ptr, size_t size);
+```
+
+The `success` field indicates whether the call succeeded.
+If it failed, the error code is stored in `error`. If it succeeded,
+the value in `error` is undefined. `ptr` and `size` contain the pointer
+and size of the passed buffer.
+
+
+5.1.5 Read-Only Allow
+---------------------------------
+
+The read-only allow system call has this function prototype:
+
+```c
+typedef struct {
+  bool success;
+  const void* ptr;
+  size_t size;
+  tock_error_t error;
+} allow_ro_return_t;
+
+allow_ro_return_t allow_readonly(uint32_t driver, uint32_t allow, const void* ptr, size_t size);
+```
+
+The `success` field indicates whether the call succeeded.
+If it failed, the error code is stored in `error`. If it succeeded,
+the value in `error` is undefined. `ptr` and `size` contain the pointer
+and size of the passed buffer.
+
+5.1.6 Memop
+---------------------------------
+
+Because the Memop system calls are defined by the kernel and not extensible, they are
+directly defined by libtock-c as library functions:
+
+```c
+void* tock_app_memory_begins_at(void);
+void* tock_app_memory_ends_at(void);
+void* tock_app_flash_begins_at(void);
+void* tock_app_flash_ends_at(void);
+void* tock_app_grant_begins_at(void);
+int tock_app_number_writeable_flash_regions(void);
+void* tock_app_writeable_flash_region_begins_at(int region_index);
+void* tock_app_writeable_flash_region_ends_at(int region_index);
+```
+
+They wrap around an underlying function which uses inline assembly:
+
+```c
+void* memop(uint32_t op_type, int arg1);
+```
+
+5.1.7 Exit
+---------------------------------
+
+The Exit system calls have these function prototypes:
+
+```c
+void tock_exit(uint32_t completion_code);
+void tock_restart(uint32_t completion_code);
+```
+
+Since these two variants of Exit never return, they have
+no return value.
+
+
+5.2 libtock-rs
 ---------------------------------
 
 
 
-6.1.2 Yield Return Type
----------------------------------
-
-6.1.3 Subscribe Return Type
----------------------------------
-
-6.1.4 Command  Return Type
----------------------------------
-
-6.1.5 Allow Return Type
----------------------------------
-
-6.1.6 Memop Return Type
----------------------------------
-
-
-
-7 Authors' Address
+6 Authors' Address
 =================================
 ```
 email - Guillaume Endignoux <guillaumee@google.com>
