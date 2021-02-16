@@ -662,8 +662,8 @@ impl kernel::mpu::MPU for MPU {
                 // Calculate the minimum number of subregions needed to cover
                 // the `app_memory_size`.
                 //
-                // Want `round_up(app_memory_size / (region_size / 8))`.
-                ((app_memory_size + subregion_size - 1) * 8) / region_size
+                // Want `round_up(app_memory_size / subregion_size)`.
+                (app_memory_size + subregion_size - 1) / subregion_size
             }
         };
 
